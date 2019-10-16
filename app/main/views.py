@@ -291,17 +291,27 @@ class TemplatesRoutes(Resource):
 
         return list_templates()
 
+
 template_ns = api.namespace('template', description='For defining and retrieving templates')
 # gets and sets the template which is default.
 
+
 # gets and sets templates with url parameters
-@template_ns.route('/<path:template>', methods=['GET', 'POST'])
+@template_ns.route('/<path:template>', methods=['GET', 'POST', 'DELETE'])
 class TemplateRoutes(Resource):
     def get(self, template):
 
         response = result_to_dicts(Template.query.filter_by(name=template))
 
         return jsonify(response)
+
+    def delete(self, template):
+
+        template = Template.query.filter_by(name=template).first()
+        sadb.session.delete(template)
+        sadb.session.commit()
+
+        return jsonify(result_to_dicts([template]))
 
     def post(self, template):
 
@@ -329,7 +339,7 @@ class TemplateRoutes(Resource):
 
 
 def list_templates():
-    temp=Template.query.all()
+    temp =Template.query.all()
     return jsonify(result_to_dicts(temp))
 
 
