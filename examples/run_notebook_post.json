@@ -1,0 +1,4 @@
+{
+  "parameters": {"obj":{"key":"value1"}, "num":"8"},
+  "outputNotebookPath":"./new_folder/{{args.timestamp}}"
+}

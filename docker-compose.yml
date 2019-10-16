@@ -1,0 +1,14 @@
+version: '3'
+services:
+  app:
+    build:
+      context: .
+    ports:
+      - '5000:5000'
+    volumes:
+      - ./app:/home/papermill_api/app
+    environment:
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - FLASK_APP=${FLASK_APP:-papermill_api.py}
+      - FLASK_CONFIG=${FLASK_CONFIG:-production}

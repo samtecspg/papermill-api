@@ -1,0 +1,10 @@
+nbformat==4.4.0
+Flask==1.0.2
+papermill[s3]
+nteract-scrapbook[all]
+botocore<1.13.0,>=1.12.130
+flask-sqlalchemy
+flask_migrate
+flask_restplus
+gunicorn
+click
