@@ -12,6 +12,7 @@ from . import main
 from .. import db as sadb
 from app.models import DefaultTemplate, Template
 from .errors import InvalidUsage
+from botocore.exceptions import ClientError
 
 
 api = Api(main, title="Papermill API", version="1.0")
@@ -110,7 +111,13 @@ class RunNotebook(Resource):
 
         default = get_default_template()
 
-        template = data.get("template", default.template.name if default else None)
+        template = None
+
+        try:
+            template = data.get("template", default.template.name)
+        except:
+            pass
+
 
         # override default output path
         out_path = data.get("outputNotebookPath", out_path)
@@ -135,12 +142,19 @@ class RunNotebook(Resource):
 
         outfile = os.path.join(out_path, out_name)
 
-        #TODO Catch 403 forbidden and others and return informative message
-        result = pm.execute_notebook(
-            "s3://" + notebook,
-            outfile,
-            parameters=data
-        )
+
+        try:
+            result = pm.execute_notebook(
+                "s3://" + notebook,
+                outfile,
+                parameters=data
+            )
+
+        except ClientError as error:
+            response = Response(json.dumps(error.response["Error"]))
+            response.status_code = int(error.response["Error"]["Code"])
+            return response
+
 
         nb = sb.read_notebook(outfile)
         json_result = {"result": nb.scraps.data_dict}
