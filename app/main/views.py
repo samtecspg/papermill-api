@@ -94,7 +94,7 @@ def get_path(f):
 @api.param('notebook', 'path to the resource on S3')
 class RunNotebook(Resource):
 
-    @api.doc(params={'template': 'name of a template to use to store the resulting notebook',
+    @api.doc(params={'template': 'name of a template to used to store the resulting notebook',
                      'outputNotebookPath': 'path to store the output notebook'})
     @get_path
     def get(self, out_path, out_name, notebook):
@@ -233,7 +233,7 @@ class RunNotebook(Resource):
         return response
 
 
-templates_ns = api.namespace('templates', description='For defining and retrieving templates')
+templates_ns = api.namespace('template', description='For defining, retrieving ad deleting templates')
 # gets and sets the template which is default.
 
 templates_post_model = templates_ns.model('template_post', {
@@ -245,17 +245,31 @@ templates_post_model = templates_ns.model('template_post', {
                                 }
                          )
 
+templates_delete_model = templates_ns.model('template_delete', {
+                                     "name": fields.String
+                                }
+                         )
 
-@templates_ns.route('/', methods=['GET', 'POST'])
+
+@templates_ns.route('/', methods=['GET', 'POST', 'DELETE'])
 class TemplatesRoutes(Resource):
-    @api.param('default', 'set as default template',
+    @api.param('default', 'Return only default template. Otherwise return all templates.',
                enum=["true", "false", "t", "f", "yes", "no", "y", "n", "on", "off", "0", "1"])
     def get(self):
 
-        if "default" in request.args:
+        if strtobool(request.args.get('default') or "false"):
             return jsonify(get_default_template().template.as_dict() or [])
         else:
             return list_templates()
+
+    @templates_ns.expect(templates_delete_model)
+    def delete(self):
+        data = json.loads(request.data.decode())
+        template = Template.query.filter_by(name=data["name"]).first()
+        sadb.session.delete(template)
+        sadb.session.commit()
+
+        return jsonify(result_to_dicts([template]))
 
     @templates_ns.expect(templates_post_model)
     def post(self):
