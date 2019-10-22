@@ -251,14 +251,14 @@ templates_delete_model = templates_ns.model('template_delete', {
                          )
 
 
-@templates_ns.route('/', methods=['GET', 'POST', 'DELETE'])
+@templates_ns.route('/', methods=['GET', 'POST', 'PATCH', 'DELETE'])
 class TemplatesRoutes(Resource):
     @api.param('default', 'Return only default template. Otherwise return all templates.',
                enum=["true", "false", "t", "f", "yes", "no", "y", "n", "on", "off", "0", "1"])
     def get(self):
 
         if strtobool(request.args.get('default') or "false"):
-            return jsonify(get_default_template().template.as_dict() or [])
+            return jsonify(get_default_template().template.as_dict() if get_default_template().template else [])
         else:
             return list_templates()
 
@@ -269,7 +269,7 @@ class TemplatesRoutes(Resource):
         sadb.session.delete(template)
         sadb.session.commit()
 
-        return jsonify(result_to_dicts([template]))
+        return list_templates()
 
     @templates_ns.expect(templates_post_model)
     def post(self):
@@ -278,44 +278,66 @@ class TemplatesRoutes(Resource):
 
         existing = Template.query.filter_by(name=data["name"])
 
-        if existing.first():
-            if "content" in data:
-                existing.update(dict(content=data["content"]))
-                sadb.session.commit()
+        try:
+            if existing.first():
+                raise InvalidUsage("Template exists")
+
+        except InvalidUsage as error:
+            response = Response(json.dumps(error.to_dict()))
+            response.status_code = error.status_code
+            return response
+
+        t = Template(name=data["name"], content=data["content"])
+        save_models([t])
+
+        try:
+            is_default = strtobool(data.get('default') or "false")
+        except ValueError as error:
+            message = dict({"Error": str(error)})
+            response = Response(json.dumps(message, indent=4), content_type="application/json")
+            response.status_code = 500
+            return response
+        if is_default:
             try:
-                is_default = strtobool(data.get('default') or "false")
-            except ValueError as error:
-                message = dict({"Error": str(error)})
-                response = Response(json.dumps(message, indent=4), content_type="application/json")
-                response.status_code = 500
-                return response
-            if is_default:
-                try:
-                    dt = DefaultTemplate.query.one()
-                except:
-                    dt = DefaultTemplate()
-                dt.template_id = existing.first().id
-                save_models([dt])
+                dt = DefaultTemplate.query.one()
+            except:
+                dt = DefaultTemplate()
 
-        else:
-            t = Template(name=data["name"], content=data["content"])
-            save_models([t])
+            dt.template_id = t.id
+            save_models([dt])
 
-            try:
-                is_default = strtobool(data.get('default') or "false")
-            except ValueError as error:
-                message = dict({"Error": str(error)})
-                response = Response(json.dumps(message, indent=4), content_type="application/json")
-                response.status_code = 500
-                return response
-            if is_default:
-                try:
-                    dt = DefaultTemplate.query.one()
-                except:
-                    dt = DefaultTemplate()
+        return list_templates()
 
-                dt.template_id = t.id
-                save_models([dt])
+    @templates_ns.expect(templates_post_model)
+    def patch(self):
+
+        data = json.loads(request.data.decode())
+
+        existing = Template.query.filter_by(name=data["name"]).first()
+
+        try:
+            if not existing:
+                raise InvalidUsage("Template does not exist")
+
+        except InvalidUsage as error:
+            response = Response(json.dumps(error.to_dict()))
+            response.status_code = error.status_code
+            return response
+
+        existing.content = data["content"]
+        save_models([existing])
+
+        set_default_template = strtobool(data.get('default') or "false")
+        dt = DefaultTemplate.query.one()
+
+        if set_default_template:
+            dt.template_id = existing.id
+
+        # unassign default if is false and this template is currently the default.
+        elif dt.template_id == existing.id:
+            dt.template_id = None
+
+        save_models([dt])
 
         return list_templates()
 
@@ -325,7 +347,7 @@ template_ns = api.namespace('template', description='For defining and retrieving
 
 
 # gets and sets templates with url parameters
-@template_ns.route('/<path:template>', methods=['GET', 'POST', 'DELETE'])
+@template_ns.route('/<path:template>', methods=['GET', 'DELETE'])
 class TemplateRoutes(Resource):
     def get(self, template):
 
@@ -341,6 +363,7 @@ class TemplateRoutes(Resource):
 
         return jsonify(result_to_dicts([template]))
 
+    @templates_ns.expect(templates_post_model)
     def post(self, template):
 
         data = json.loads(request.data.decode())
@@ -349,7 +372,7 @@ class TemplateRoutes(Resource):
 
         if existing.first():
             existing.update(dict(content=data["content"]))
-            sadb.session.commit()
+            # sadb.session.commit()
             if strtobool(data.get('default') or "false"):
                 dt = DefaultTemplate.query.one()
                 dt.template_id = existing.first().id

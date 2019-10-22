@@ -28,7 +28,7 @@ class DefaultTemplate(sadb.Model):
     def as_dict(self):
 
         self_dict = {
-                    "name": self.template.name,
+                    "name": self.template.name if self.template else None,
                 }
 
         return self_dict
