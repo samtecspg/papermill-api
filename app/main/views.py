@@ -1,4 +1,4 @@
-from flask import request, Response, render_template_string, jsonify
+from flask import request, Response, render_template_string, jsonify, abort
 from flask_restplus import Resource, Api, fields
 from sqlalchemy.orm.exc import NoResultFound
 import papermill as pm
@@ -12,14 +12,19 @@ from . import main
 from .. import db as sadb
 from app.models import DefaultTemplate, Template
 from .errors import InvalidUsage
-from botocore.exceptions import ClientError
-
+from botocore.exceptions import ClientError, ParamValidationError
 
 api = Api(main, title="Papermill API", version="1.0")
 
 # gets the record in the DefaultTemplate table that points to the current default template
-def get_default_template():
+def get_default_template_record():
     return DefaultTemplate.query.first()
+
+def get_default_template():
+    default = get_default_template_record()
+    if not default is None:
+        return default.template
+    return None
 
 # creates a list containing the dictionary representation of
 # model objects as defined in the as_dict method of each model
@@ -58,46 +63,103 @@ run_post_model = run.model('run_post', {
                                 }
 )
 
+# this decorator will do some preprecessing common to all run requests to populate values used by 'run_notebook'
+# and the templating functionality
 def get_path(f):
-    def wrapper(self, notebook):
+    def wrapper(self):
+
+        # What type of service the notebook is located on.
+        # so far, {'s3','local'}
+        data = dict(request.args)
+
+        location = data.get("location", None)
+        notebook = data.get("notebook", None)
+
+        # in order to generalize this in both cases
+        # post body
+        if self.api.payload:
+
+            user_out = self.api.payload.get("outputNotebookPath", None)
+
+        # query args
+        else:
+            user_out = data.get("outputNotebookPath", None)
+
+        notebook = notebook.replace("s3://", "")
+
         path_array = notebook.split('/')
 
-        try:
-            if len(path_array) < 2:
-                # prevents unhandled exception of constructing path to notebook: os.path.join(*path_array)
-                raise InvalidUsage("Invalid notebook location")
-        except InvalidUsage as error:
-            response = Response(json.dumps(error.to_dict()))
-            response.status_code = error.status_code
-            return response
-
-
-        # get file name
         filename = path_array[-1]
         del path_array[-1]
+
+        # TODO is this necessary given the file name builder below?
         # insert file extension if not present
         if not re.search('\.ipynb$', filename):
             filename += ".ipynb"
-        # path to notebook
-        notebook = os.path.join(*path_array) + "/" + filename
 
-        # build default output path and file name
-        out_path = "s3://" + os.path.join(*path_array) + "/"
         time_str = time.strftime("%Y%m%d%H%M%S")
+        out_notebook_name = filename.replace(".ipynb", "") + "_out_" + time_str + ".ipynb"
 
-        out_name = filename.replace(".ipynb", "") + "_out_" + time_str + ".ipynb"
-        return f(self, out_path, out_name, notebook)
+        if location.lower() == "s3":
+
+            try:
+                if len(path_array) < 1:
+                    # prevents unhandled exception of constructing path to notebook: os.path.join(*path_array)
+                    raise InvalidUsage("Invalid notebook location")
+
+            except InvalidUsage as error:
+                response = Response(json.dumps(error.to_dict()))
+                response.status_code = error.status_code
+                return response
+
+            bucket = path_array[0]
+            home = path_array[1]
+            user = path_array[2]
+            out_path = "s3://" + bucket +"/"+ os.path.join(*path_array[1:]) + "/"
+            in_notebook = out_path + filename
+            user_notebook_path = os.path.join(*path_array[3:])
+
+            paths_dict = {
+                      "location": location,
+                      "bucket": bucket,
+                      "home": home,
+                      "user": user,
+                      "user_notebook_path": user_notebook_path,
+                      "in_notebook": in_notebook,
+                      "out_path": out_path,
+                      "out_notebook_name": out_notebook_name,
+                      "user_out": user_out
+                      }
+
+        else:
+
+            out_path = "/".join(path_array)+"/"
+            in_notebook = out_path + filename
+
+            paths_dict = {
+                      "location": location,
+                      "in_notebook": in_notebook,
+                      "out_path": out_path,
+                      "out_notebook_name": out_notebook_name,
+                      "user_out": user_out
+                      }
+
+        return f(self, paths_dict)
 
     return wrapper
 
-@run.route('/<path:notebook>', methods=['GET', 'POST'])
-@api.param('notebook', 'path to the resource on S3')
+
+@run.route('/', methods=['GET', 'POST'])
 class RunNotebook(Resource):
 
     @api.doc(params={'template': 'name of a template to used to store the resulting notebook',
-                     'outputNotebookPath': 'path to store the output notebook'})
+                     'outputNotebookPath': 'path to store the output notebook'
+                     }
+             )
+    @api.param('notebook', 'path to the resource on S3', required=True)
+    @api.param('location', 'specify whether the notebook resides in s3 or local', required=True, enum=["s3", "local"])
     @get_path
-    def get(self, out_path, out_name, notebook):
+    def get(self, paths_dict):
 
         data = dict(request.args)
 
@@ -110,29 +172,12 @@ class RunNotebook(Resource):
             return response
 
         default = get_default_template()
+        template = data.get("template",  None)
+        template_args = {}
+        template_args.update({"notebook_name": paths_dict["out_notebook_name"]})
+        out_path = render(template, default, paths_dict["user_out"], paths_dict["out_path"], template_args=template_args)
 
-        template = None
-
-        try:
-            template = data.get("template", default.template.name)
-        except:
-            pass
-
-
-        # override default output path
-        out_path = data.get("outputNotebookPath", out_path)
-
-        if template:
-            template_args = {}
-            template_args.update({"notebook_name": out_name})
-
-            try:
-                out_path = render(template, template_args=template_args)
-            except NoResultFound as error:
-                response = Response(json.dumps({"error": "No template: " + template}))
-                response.status_code = 404
-                return response
-
+        # TODO this leaves an empty directory if 'execute_notebook' is unsuccessful
         if "s3://" not in out_path:
             try:
                 os.makedirs(out_path, mode=0o777, exist_ok=False)
@@ -140,12 +185,12 @@ class RunNotebook(Resource):
                 # directory exists
                 pass
 
-        outfile = os.path.join(out_path, out_name)
-
+        outfile = os.path.join(out_path, paths_dict["out_notebook_name"])
 
         try:
+
             result = pm.execute_notebook(
-                "s3://" + notebook,
+                paths_dict["in_notebook"],
                 outfile,
                 parameters=data
             )
@@ -154,7 +199,11 @@ class RunNotebook(Resource):
             response = Response(json.dumps(error.response["Error"]))
             response.status_code = int(error.response["Error"]["Code"])
             return response
-
+        except ParamValidationError as error:
+            error.kwargs.update({"message": "Check 'location' parameter."})
+            response = Response(json.dumps(error.kwargs))
+            response.status_code = 400
+            return response
 
         nb = sb.read_notebook(outfile)
         json_result = {"result": nb.scraps.data_dict}
@@ -171,16 +220,16 @@ class RunNotebook(Resource):
 
         return response
 
-    @run.expect(run_post_model)
+    @api.param('notebook', 'path to the resource on S3', required=True)
+    @api.param('location', 'specify whether the notebook resides in s3 or local', required=True, enum=["s3", "local"])
+    @api.expect(run_post_model)
     @get_path
-    def post(self, out_path, out_name, notebook):
+    def post(self, paths_dict):
 
+        # TODO currently fails to give appropriate message if the json is invalid.
         if request.get_json(force=True):
 
             data = request.get_json()
-
-            # parameters sent to notebook
-            parameters = data.get("parameters", None)
 
             try:
                 if "template" in data and "outputNotebookPath" in data:
@@ -190,14 +239,14 @@ class RunNotebook(Resource):
                 response.status_code = error.status_code
                 return response
 
-            template = data.get("template", get_default_template().template if get_default_template() else None)
-            out_path = data.get("outputNotebookPath", out_path)
+            # parameters sent to notebook
+            parameters = data.get("parameters", None)
 
-            if template:
-                template_args = {}
-                template_args.update(template.get("args", {}))
-                template_args.update({"notebook_name": out_name})
-                out_path = render(template["name"], template_args=template_args)
+            default = get_default_template()
+            template = data.get("template", None)
+            template_args = {}
+            template_args.update({"notebook_name": paths_dict["out_notebook_name"]})
+            out_path = render(template, default, paths_dict["user_out"], paths_dict["out_path"], template_args=template_args)
 
         else:
             raise InvalidUsage("only application/json supported")
@@ -209,13 +258,25 @@ class RunNotebook(Resource):
                 # directory exists
                 pass
 
-        outfile = os.path.join(out_path, out_name)
+        outfile = os.path.join(out_path, paths_dict["out_notebook_name"])
 
-        result = pm.execute_notebook(
-            "s3://" + notebook,
-            outfile,
-            parameters=parameters
-        )
+        try:
+
+            result = pm.execute_notebook(
+                paths_dict["in_notebook"],
+                outfile,
+                parameters=parameters
+            )
+
+        except ClientError as error:
+            response = Response(json.dumps(error.response["Error"]))
+            response.status_code = int(error.response["Error"]["Code"])
+            return response
+        except ParamValidationError as error:
+            error.kwargs.update({"message": "Check 'local' parameter."})
+            response = Response(json.dumps(error.kwargs))
+            response.status_code = 400
+            return response
 
         nb = sb.read_notebook(outfile)
         json_result = {"result": nb.scraps.data_dict}
@@ -233,7 +294,7 @@ class RunNotebook(Resource):
         return response
 
 
-templates_ns = api.namespace('template', description='For defining, retrieving ad deleting templates')
+templates_ns = api.namespace('template', description='For defining, retrieving and deleting templates')
 # gets and sets the template which is default.
 
 templates_post_model = templates_ns.model('template_post', {
@@ -258,7 +319,7 @@ class TemplatesRoutes(Resource):
     def get(self):
 
         if strtobool(request.args.get('default') or "false"):
-            return jsonify(get_default_template().template.as_dict() if get_default_template().template else [])
+            return jsonify(get_default_template().as_dict() if get_default_template() else [])
         else:
             return list_templates()
 
@@ -324,7 +385,8 @@ class TemplatesRoutes(Resource):
             response.status_code = error.status_code
             return response
 
-        existing.content = data["content"]
+        if "content" in data:
+            existing.content = data["content"]
         save_models([existing])
 
         set_default_template = strtobool(data.get('default') or "false")
@@ -357,11 +419,21 @@ class TemplateRoutes(Resource):
 
     def delete(self, template):
 
-        template = Template.query.filter_by(name=template).first()
-        sadb.session.delete(template)
+        existing = Template.query.filter_by(name=template).first()
+
+        try:
+            if not existing:
+                raise InvalidUsage("Template does not exist")
+
+        except InvalidUsage as error:
+            response = Response(json.dumps(error.to_dict()))
+            response.status_code = error.status_code
+            return response
+
+        sadb.session.delete(existing)
         sadb.session.commit()
 
-        return jsonify(result_to_dicts([template]))
+        return list_templates()
 
     @templates_ns.expect(templates_post_model)
     def post(self, template):
@@ -370,21 +442,21 @@ class TemplateRoutes(Resource):
 
         existing = Template.query.filter_by(name=template)
 
-        if existing.first():
-            existing.update(dict(content=data["content"]))
-            # sadb.session.commit()
-            if strtobool(data.get('default') or "false"):
-                dt = DefaultTemplate.query.one()
-                dt.template_id = existing.first().id
-                save_models([dt])
+        try:
+            if existing.first():
+                raise InvalidUsage("Template exists")
 
-        else:
-            t = Template(name=template, content=data["content"])
-            save_models([t])
-            if strtobool(data.get('default') or "false"):
-                dt = DefaultTemplate.query.one()
-                dt.template_id = t.id
-                save_models([dt])
+        except InvalidUsage as error:
+            response = Response(json.dumps(error.to_dict()))
+            response.status_code = error.status_code
+            return response
+
+        t = Template(name=template, content=data["content"])
+        save_models([t])
+        if strtobool(data.get('default') or "false"):
+            dt = DefaultTemplate.query.one()
+            dt.template_id = t.id
+            save_models([dt])
 
         return list_templates()
 
@@ -394,17 +466,41 @@ def list_templates():
     return jsonify(result_to_dicts(temp))
 
 
-# renders the template stored in the databse
-def render(template_name, template_args={}):
+def default_template_parameters(f):
+    def wrapper(template_name, default, user_out, outputpath, template_args):
+        # some initial default args for things like a time stamp.
+        template_args["timestamp"] = time.strftime("%Y%m%d%H%M%S")
+        template_args["year"] = time.strftime("%Y")
+        template_args["month"] = time.strftime("%m")
+        template_args["day"] = time.strftime("%d")
+        return f(template_name, default, user_out, outputpath, template_args=template_args)
 
-    # some initial default args for things like a time stamp.
-    template_args["timestamp"] = time.strftime("%Y%m%d%H%M%S")
-    template_args["year"] = time.strftime("%Y")
-    template_args["month"] = time.strftime("%m")
-    template_args["day"] = time.strftime("%d")
+    return wrapper
 
-    t = Template.query.filter_by(name=template_name).one()
 
-    rendered_template = render_template_string(t.content, args=template_args)
+@default_template_parameters
+# if the user specifies a template, render the template
+# if the user specifies an output path, render that
+# if neither of these are defined, render the default template
+# If the default template does not exist, use the location of the input notebook
+def render(template_name, default, user_out, outputpath, template_args={}):
+
+    if template_name:
+
+        try:
+            t = Template.query.filter_by(name=template_name).one()
+        except NoResultFound as error:
+            response = Response(json.dumps({"error": "No template: " + template_name}))
+            response.status_code = 404
+            abort(response)
+
+        rendered_template = render_template_string(t.content, args=template_args)
+
+    elif user_out:
+        rendered_template = render_template_string(user_out, args=template_args)
+    elif default:
+        rendered_template = render_template_string(default.content, args=template_args)
+    else:
+        rendered_template = render_template_string(outputpath, args=template_args)
 
     return rendered_template
