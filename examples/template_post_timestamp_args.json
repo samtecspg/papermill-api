@@ -1,5 +1,5 @@
 {
- "name": "template",
- "content":"{{args.timestamp}}//{{args.arg1}}//{{args.arg2}}",
- "default": "true"
+  "name": "template",
+  "content": "{{args.timestamp}}//{{args.arg1}}//{{args.arg2}}",
+  "default": "true"
 }

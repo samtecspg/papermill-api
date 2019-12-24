@@ -1,4 +1,3 @@
-
 # Custom exception object for catching exceptions defined in this code
 class InvalidUsage(Exception):
     status_code = 400
@@ -8,7 +7,7 @@ class InvalidUsage(Exception):
         self.message = message
 
         if status_code is not None:
-               self.status_code = status_code
+            self.status_code = status_code
         self.payload = payload
 
     def to_dict(self):

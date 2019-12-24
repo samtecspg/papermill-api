@@ -1,0 +1,6 @@
+{
+    "python.pythonPath": "/Users/malave/code/spg/papermill-api/venv/bin/python3",
+    "python.linting.pylintEnabled": true,
+    "python.linting.mypyEnabled": false,
+    "python.linting.enabled": true
+}
