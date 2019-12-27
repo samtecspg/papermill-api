@@ -14,7 +14,7 @@ def delete(name):
     sadb.session.commit()
 
 
-def post(name, content, default):
+def create(name, content, default):
     existing = Template.query.filter_by(name=name)
     if existing.first():
         raise InvalidUsage("Template exists")
@@ -29,7 +29,7 @@ def post(name, content, default):
         save_models([dt])
 
 
-def patch(name, content, default):
+def update(name, content, default):
     existing = Template.query.filter_by(name=name).first()
     if not existing:
         raise InvalidUsage("Template does not exist")

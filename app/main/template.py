@@ -55,7 +55,7 @@ class TemplateRoutes(Resource):
     def post(self, template):
         data = json.loads(request.data.decode())
         try:
-            ts.post(name=template, content=data["content"], default=data.get('default'))
+            ts.create(name=template, content=data["content"], default=data.get('default'))
 
         except InvalidUsage as error:
             response = Response(json.dumps(error.to_dict()))
@@ -93,7 +93,7 @@ class TemplatesRoutes(Resource):
     def post(self):
         data = json.loads(request.data.decode())
         try:
-            ts.post(name=data["name"], content=data["content"], default=data.get('default'))
+            ts.create(name=data["name"], content=data["content"], default=data.get('default'))
 
         except InvalidUsage as error:
             response = Response(json.dumps(error.to_dict()))
@@ -111,7 +111,7 @@ class TemplatesRoutes(Resource):
     def patch(self):
         data = json.loads(request.data.decode())
         try:
-            ts.patch(name=data["name"], content=data["content"], default=data.get('default'))
+            ts.update(name=data["name"], content=data["content"], default=data.get('default'))
         except InvalidUsage as error:
             response = Response(json.dumps(error.to_dict()))
             response.status_code = error.status_code
