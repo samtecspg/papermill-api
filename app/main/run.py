@@ -16,14 +16,12 @@ run_ns = api.namespace('run', description='For running notebooks')
 render_template_model = run_ns.model('render_template', {
     "name": fields.String,
     "args": fields.Raw
-}
-                                     )
+})
 
 run_post_model = run_ns.model('run_post', {
     "parameters": fields.Raw,
     "template": fields.Nested(render_template_model)
-}
-                              )
+})
 
 
 # this decorator will do some preprocessing common to all run requests to populate values used by 'run_notebook'

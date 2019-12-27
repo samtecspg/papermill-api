@@ -1,4 +1,4 @@
-from flask_restplus import Api, fields
+from flask_restplus import Api
 
 from . import main
 from .. import db as sadb
@@ -25,31 +25,4 @@ def save_models(models):
         sadb.session.add(each)
     sadb.session.commit()
 
-    response = result_to_dicts(type(models[0]).query.all())
-
-    return response
-
-
-templates_ns = api.namespace('template', description='For defining, retrieving and deleting templates')
-# gets and sets the template which is default.
-
-templates_post_model = templates_ns.model('template_post', {
-    "name": fields.String,
-    "content": fields.String,
-    "default": fields.String(enum=["true", "false", "t", "f", "yes", "no", "y", "n",
-                                   "on", "off", "0", "1"],
-                             description="a string representing a truth value")
-}
-                                          )
-
-templates_delete_model = templates_ns.model('template_delete', {
-    "name": fields.String
-}
-                                            )
-
-template_ns = api.namespace('template', description='For defining and retrieving templates')
-
-# gets and sets the template which is default.
-
-
-# gets and sets templates with url parameters
+    return result_to_dicts(type(models[0]).query.all())
