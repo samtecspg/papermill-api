@@ -1,5 +1,5 @@
 nbformat==4.4.0
-Flask==1.0.2
+Flask==2.3.2
 papermill[s3]
 nteract-scrapbook[all]
 botocore<1.13.0,>=1.12.130
